@@ -622,3 +622,23 @@ button {
     font-size: 21px;
   }
 }
+
+.learning-path { grid-column: 1 / -1; border: 1px solid var(--green-deep); background: rgba(31,191,117,.08); padding: 24px; border-radius: 8px; }
+.learning-path h3 { font-size: 24px; margin: 12px 0; }
+.learning-path p { line-height: 1.8; margin-bottom: 0; }
+.topic-filter { display: flex; flex-wrap: wrap; gap: 8px; max-width: 1320px; margin: 0 auto 20px; }
+.topic-filter button { color: var(--foreground); border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 10px 14px; }
+.topic-filter button[aria-pressed="true"] { background: var(--green-deep); border-color: var(--green); }
+.assumptions { font-size: 13px; line-height: 1.7; color: var(--muted); }
+.solution-steps { margin: 0; padding-left: 24px; line-height: 1.8; }
+.solution-steps li + li { margin-top: 12px; }
+button:focus-visible, textarea:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+.answer-grid button:disabled { cursor: default; }
+.spot-card h3 { line-height: 1.55; }
+.board-line { align-self: flex-start; margin-top: 24px; }
+.table-felt { min-height: 310px; }
+@media (max-width: 640px) {
+  .board-line { margin-top: 56px; gap: 5px; }
+  .playing-card { width: 39px; height: 58px; }
+  .table-felt { min-height: 320px; padding: 12px; }
+}

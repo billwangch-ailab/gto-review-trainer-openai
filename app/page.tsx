@@ -1,32 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { advancedQuestions, dailyQuestions, topics, type Topic, type Question } from "./advanced";
 
-type Mode = "dashboard" | "preflop" | "postflop" | "daily" | "review" | "hands";
-type QuestionType = "preflop" | "postflop";
-
-type Question = {
-  id: string;
-  type: QuestionType;
-  spot: string;
-  position: string;
-  hand: string;
-  board?: string;
-  pot?: string;
-  stack?: string;
-  villain?: string;
-  prompt: string;
-  options: string[];
-  answer: string;
-  mix?: string;
-  concept: string;
-  leak: string;
-  tags: string[];
-};
-
+type Mode = "dashboard" | "advanced" | "preflop" | "postflop" | "daily" | "review" | "hands";
 type Attempt = {
   questionId: string;
-  type: QuestionType;
+  type: Question["type"];
   spot: string;
   hand: string;
   board?: string;
@@ -229,13 +209,13 @@ const postflopQuestions: Question[] = [
     options: ["Check", "Bet 33%", "Bet 75%", "All-in"],
     answer: "Bet 33%",
     mix: "小注或 check 混合",
-    concept: "你有 nut flush blocker 與後門/高牌 equity，小注能壓迫無方塊牌，也保留範圍彈性。",
+    concept: "你有 nut flush draw 與高牌 equity，小注能壓迫無方塊牌，也保留範圍彈性。",
     leak: "單色牌面過度放棄",
     tags: ["Monotone", "Blockers", "C-bet"],
   },
 ];
 
-const allQuestions = [...preflopQuestions, ...postflopQuestions];
+const allQuestions = [...advancedQuestions, ...preflopQuestions, ...postflopQuestions];
 const storageKey = "gto-review-trainer-attempts-v1";
 
 function formatDate(ts: number) {
@@ -261,6 +241,11 @@ export default function Home() {
   const [mode, setMode] = useState<Mode>("dashboard");
   const [questionIndex, setQuestionIndex] = useState(0);
   const [dailyIndex, setDailyIndex] = useState(0);
+  const [dailyBank, setDailyBank] = useState<Question[]>(advancedQuestions.slice(0, 20));
+  const [dailyCorrect, setDailyCorrect] = useState(0);
+  const [topic, setTopic] = useState<Topic>("全部");
+  const [retryQuestion, setRetryQuestion] = useState<Question | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState("");
   const [revealed, setRevealed] = useState(false);
   const [attempts, setAttempts] = useState<Attempt[]>([]);
@@ -268,22 +253,32 @@ export default function Home() {
   const [savedHands, setSavedHands] = useState<string[]>([]);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(storageKey);
-    const hands = window.localStorage.getItem("gto-review-hands-v1");
-    if (stored) setAttempts(JSON.parse(stored));
-    if (hands) setSavedHands(JSON.parse(hands));
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(storageKey) || "[]");
+      const hands = JSON.parse(window.localStorage.getItem("gto-review-hands-v1") || "[]");
+      // Browser-only hydration runs once after SSR; the loaded guard prevents overwriting saved history.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (Array.isArray(stored)) setAttempts(stored.filter((item) => item && typeof item.questionId === "string" && typeof item.timestamp === "number" && typeof item.correct === "boolean"));
+      if (Array.isArray(hands)) setSavedHands(hands.filter((item) => typeof item === "string"));
+    } catch { /* A malformed or unavailable local store must not block practice. */ }
+    setDailyBank(dailyQuestions(new Date()));
+    setLoaded(true);
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(storageKey, JSON.stringify(attempts));
-  }, [attempts]);
+    if (!loaded) return;
+    try { window.localStorage.setItem(storageKey, JSON.stringify(attempts)); } catch { /* Storage may be full or disabled. */ }
+  }, [attempts, loaded]);
 
   useEffect(() => {
-    window.localStorage.setItem("gto-review-hands-v1", JSON.stringify(savedHands));
-  }, [savedHands]);
+    if (!loaded) return;
+    try { window.localStorage.setItem("gto-review-hands-v1", JSON.stringify(savedHands)); } catch { /* Storage may be full or disabled. */ }
+  }, [savedHands, loaded]);
 
-  const activeBank = mode === "preflop" ? preflopQuestions : mode === "postflop" ? postflopQuestions : allQuestions;
-  const activeQuestion = mode === "daily" ? allQuestions[dailyIndex % allQuestions.length] : activeBank[questionIndex % activeBank.length];
+  const filteredAdvanced = advancedQuestions.filter((q) => topic === "全部" || q.topic === topic);
+  const activeBank = mode === "advanced" ? filteredAdvanced : mode === "preflop" ? preflopQuestions : mode === "postflop" ? postflopQuestions : allQuestions;
+  const dailyComplete = dailyIndex >= dailyBank.length;
+  const activeQuestion = retryQuestion || (mode === "daily" ? dailyBank[Math.min(dailyIndex, dailyBank.length - 1)] : activeBank[questionIndex % activeBank.length]);
   const todayAttempts = attempts.filter((attempt) => isToday(attempt.timestamp));
   const misses = attempts.filter((attempt) => !attempt.correct);
   const accuracy = attempts.length ? Math.round((attempts.filter((attempt) => attempt.correct).length / attempts.length) * 100) : 0;
@@ -302,8 +297,9 @@ export default function Home() {
   }, [misses]);
 
   function submitAnswer(option: string) {
-    if (revealed) return;
+    if (revealed || !loaded || (mode === "daily" && dailyComplete)) return;
     const correct = option === activeQuestion.answer;
+    if (mode === "daily" && correct) setDailyCorrect((count) => count + 1);
     setSelected(option);
     setRevealed(true);
     setAttempts((current) => [
@@ -326,12 +322,14 @@ export default function Home() {
   function nextQuestion() {
     setSelected("");
     setRevealed(false);
+    if (retryQuestion) { setRetryQuestion(null); return; }
     if (mode === "daily") setDailyIndex((index) => index + 1);
     else setQuestionIndex((index) => index + 1);
   }
 
   function jumpTo(nextMode: Mode) {
     setMode(nextMode);
+    setRetryQuestion(null);
     setSelected("");
     setRevealed(false);
     setQuestionIndex(0);
@@ -356,9 +354,10 @@ export default function Home() {
         <nav className="mode-list">
           {[
             ["dashboard", "首頁總覽", "今日進度與弱點"],
-            ["preflop", "翻前訓練", "位置與起手牌"],
+            ["advanced", "進階決策訓練", "Equity → Range → EV"],
+            ["preflop", "翻前基礎", "位置與起手牌"],
             ["postflop", "翻後情境", "牌面與下注尺度"],
-            ["daily", "每日 20 題", "快速建立直覺"],
+            ["daily", "每日 20 題", "進階混合・不重複"],
             ["review", "錯題本", "重練最痛的點"],
             ["hands", "牌局筆記", "貼上自己的手牌"],
           ].map(([key, label, helper]) => (
@@ -377,8 +376,8 @@ export default function Home() {
       <section className="workspace">
         <header className="top-strip">
           <div>
-            <p className="eyebrow">No-Limit Hold'em training</p>
-            <h2>{mode === "dashboard" ? "今天先把決策肌肉熱起來" : "看牌面，選行動，記住原因"}</h2>
+            <p className="eyebrow">No-Limit Hold’em training</p>
+            <h2>{mode === "dashboard" ? "從勝率直覺走到範圍決策" : "先估範圍，再算價格，最後做決策"}</h2>
           </div>
           <div className="streak-pill">
             <span>{todayAttempts.length}</span>
@@ -393,13 +392,19 @@ export default function Home() {
             <Metric label="今日正確率" value={`${todayAccuracy}%`} tone="blue" />
             <Metric label="錯題數" value={misses.length.toString()} tone="red" />
 
+            <div className="learning-path">
+              <span className="eyebrow">今天的學習路線 · 24 道進階題</span>
+              <h3>懂概念之後，練習把它算成決策</h3>
+              <p>Equity 直覺 → Combo 與頻率 → Range 加權 → Pot odds 與 EV → 實戰修正</p>
+              <p className="empty-text">包含 A5s 拆桶、阻擋牌、混合頻率、抓詐唬門檻與 SPR。計算題會給定假設；情境題不冒充 solver 唯一解。</p>
+            </div>
             <div className="training-table">
               <div className="section-title">
                 <p>建議練習</p>
-                <h3>{weakSpots[0]?.[0] || "先從 BTN open 與 BB defense 開始"}</h3>
+                <h3>{weakSpots[0]?.[0] || "今天練：Combo 加權與跟注 EV"}</h3>
               </div>
               <div className="quick-actions">
-                <button onClick={() => jumpTo("preflop")}>練翻前</button>
+                <button onClick={() => jumpTo("advanced")}>開始進階 24 題</button>
                 <button onClick={() => jumpTo("postflop")}>練翻後</button>
                 <button onClick={() => jumpTo("daily")}>開始每日題</button>
               </div>
@@ -424,18 +429,34 @@ export default function Home() {
           </section>
         )}
 
-        {(mode === "preflop" || mode === "postflop" || mode === "daily") && (
+        {mode === "advanced" && (
+          <div className="topic-filter" aria-label="進階主題">
+            {topics.map((name) => <button key={name} aria-pressed={topic === name} onClick={() => { setTopic(name); setQuestionIndex(0); setSelected(""); setRevealed(false); }}>{name}</button>)}
+          </div>
+        )}
+        {mode === "daily" && dailyComplete && (
+          <section className="review-list" aria-live="polite">
+            <h3>本輪 20 題完成</h3>
+            <p>答對 {dailyCorrect} / {dailyBank.length} 題；錯題已加入錯題本。</p>
+            <button className="primary-action" onClick={() => jumpTo("review")}>檢討錯題</button>
+            <button className="primary-action" onClick={() => { setDailyIndex(0); setDailyCorrect(0); setSelected(""); setRevealed(false); setDailyBank(dailyQuestions(new Date())); }}>再練一輪</button>
+          </section>
+        )}
+        {(mode === "advanced" || mode === "preflop" || mode === "postflop" || (mode === "daily" && !dailyComplete) || (mode === "review" && retryQuestion)) && (
+
           <QuestionCard
             question={activeQuestion}
             selected={selected}
             revealed={revealed}
             onAnswer={submitAnswer}
             onNext={nextQuestion}
-            progress={mode === "daily" ? Math.min(dailyIndex + 1, 20) : questionIndex + 1}
+            progress={retryQuestion ? 1 : mode === "daily" ? dailyIndex + 1 : questionIndex % activeBank.length + 1}
+            total={retryQuestion ? 1 : mode === "daily" ? dailyBank.length : activeBank.length}
+            nextLabel={retryQuestion ? "返回錯題本" : mode === "daily" && dailyIndex === dailyBank.length - 1 ? "查看本輪成績" : "下一題"}
           />
         )}
 
-        {mode === "review" && (
+        {mode === "review" && !retryQuestion && (
           <section className="review-list">
             <div className="section-title">
               <p>錯題本</p>
@@ -445,7 +466,7 @@ export default function Home() {
               misses.map((attempt) => (
                 <article className="review-item" key={`${attempt.questionId}-${attempt.timestamp}`}>
                   <div>
-                    <span className="tag">{attempt.type === "preflop" ? "翻前" : "翻後"}</span>
+                    <span className="tag">{attempt.type === "advanced" ? "進階" : attempt.type === "preflop" ? "翻前" : "翻後"}</span>
                     <h4>{attempt.spot}</h4>
                     <p>
                       手牌 {attempt.hand}
@@ -456,6 +477,7 @@ export default function Home() {
                     <span>你選：{attempt.selected}</span>
                     <strong>建議：{attempt.answer}</strong>
                     <small>{formatDate(attempt.timestamp)}</small>
+                    {allQuestions.some((q) => q.id === attempt.questionId) && <button className="primary-action" onClick={() => { setRetryQuestion(allQuestions.find((q) => q.id === attempt.questionId)!); setSelected(""); setRevealed(false); }}>重新作答</button>}
                   </div>
                 </article>
               ))
@@ -508,6 +530,8 @@ function QuestionCard({
   onAnswer,
   onNext,
   progress,
+  total,
+  nextLabel,
 }: {
   question: Question;
   selected: string;
@@ -515,14 +539,16 @@ function QuestionCard({
   onAnswer: (option: string) => void;
   onNext: () => void;
   progress: number;
+  total: number;
+  nextLabel: string;
 }) {
   return (
     <section className="question-layout">
       <article className="spot-card">
         <div className="question-meta">
-          <span>{question.type === "preflop" ? "Preflop" : "Postflop"}</span>
+          <span>{question.type === "advanced" ? "進階" : question.type === "preflop" ? "Preflop" : "Postflop"}</span>
           <span>{question.spot}</span>
-          <span>題目 {progress}</span>
+          <span>題目 {progress} / {total}</span>
         </div>
         <div className="table-felt">
           <div className="seat hero">Hero {question.position}</div>
@@ -539,14 +565,15 @@ function QuestionCard({
         <div className="spot-details">
           {question.pot && <span>Pot {question.pot}</span>}
           {question.stack && <span>Stack {question.stack}</span>}
-          <span>{question.mix}</span>
+          {revealed && question.mix && <span>{question.mix}</span>}
         </div>
+        {question.assumptions && <p className="assumptions">{question.assumptions}</p>}
         <h3>{question.prompt}</h3>
         <div className="answer-grid">
           {question.options.map((option) => {
             const state = revealed && option === question.answer ? "correct" : revealed && option === selected ? "wrong" : "";
             return (
-              <button className={state} key={option} onClick={() => onAnswer(option)}>
+              <button disabled={revealed} className={state} key={option} onClick={() => onAnswer(option)}>
                 {option}
               </button>
             );
@@ -555,7 +582,7 @@ function QuestionCard({
       </article>
 
       <aside className="coach-panel">
-        <div className={revealed && selected === question.answer ? "result good" : revealed ? "result bad" : "result"}>
+        <div aria-live="polite" className={revealed && selected === question.answer ? "result good" : revealed ? "result bad" : "result"}>
           <p>{revealed ? (selected === question.answer ? "這題打得漂亮" : "這題值得複習") : "等待你的選擇"}</p>
           <strong>{revealed ? question.answer : "先不要偷看答案"}</strong>
         </div>
@@ -563,10 +590,12 @@ function QuestionCard({
           <span>核心概念</span>
           <p>{revealed ? question.concept : "選完行動後，這裡會顯示 GTO 思路、下注尺度與常見漏點。"}</p>
         </div>
-        <div className="tag-cloud">
+        {revealed && question.steps && <ol className="solution-steps">{question.steps.map((step) => <li key={step}>{step}</li>)}</ol>}
+        {revealed && question.type !== "advanced" && <p className="assumptions">基礎情境的建議主線，並非 solver 計算的唯一解；實際策略取決於完整範圍、尺寸與抽水。</p>}
+        {revealed && <div className="tag-cloud">
           {question.tags.map((tag) => <span key={tag}>{tag}</span>)}
-        </div>
-        <button className="primary-action" disabled={!revealed} onClick={onNext}>下一題</button>
+        </div>}
+        <button className="primary-action" disabled={!revealed} onClick={onNext}>{nextLabel}</button>
       </aside>
     </section>
   );
